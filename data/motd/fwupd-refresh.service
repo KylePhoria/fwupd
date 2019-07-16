@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh fwupd metadata
+Documentation=man:fwupdmgr(1)
+#ConditionACPower=true
+After=network.target network-online.target systemd-networkd.service NetworkManager.service connman.service
+
+[Service]
+Type=oneshot
+ExecStart=fwupdmgr refresh
