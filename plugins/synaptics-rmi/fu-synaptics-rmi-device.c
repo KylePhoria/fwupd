@@ -862,10 +862,88 @@ fu_synaptics_rmi_device_poll_wait (FuSynapticsRmiDevice *self, GError **error)
 }
 
 static gboolean
+fu_synaptics_rmi_device_wait_for_attr (FuSynapticsRmiDevice *self,
+				       guint8 source_mask,
+				       guint timeout_ms,
+				       GError **error)
+{
+	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(GTimer) timer = g_timer_new ();
+
+	/* wait for event from hardware */
+	while (g_timer_elapsed (timer, NULL) * 1000.f < timeout_ms) {
+		g_autoptr(GByteArray) res = NULL;
+		g_autoptr(GError) error_local = NULL;
+
+		/* read from fd */
+		res = fu_io_channel_read_byte_array (priv->io_channel,
+						     HID_RMI4_ATTN_INTERUPT_SOURCES + 1,
+						     timeout_ms,
+						     FU_IO_CHANNEL_FLAG_NONE,
+						     &error_local);
+		if (res == NULL) {
+			if (g_error_matches (error_local, G_IO_ERROR, G_IO_ERROR_TIMED_OUT))
+				break;
+			g_propagate_error (error, g_steal_pointer (&error_local));
+			return FALSE;
+		}
+		if (res->len < HID_RMI4_ATTN_INTERUPT_SOURCES + 1) {
+			g_debug ("attr: ignoring small read of %u", res->len);
+			continue;
+		}
+		if (res->data[RMI_READ_DATA_REPORT_ID] != RMI_ATTN_REPORT_ID) {
+			g_debug ("attr: ignoring non-attn report 0x%x",
+				 res->data[RMI_READ_DATA_REPORT_ID]);
+			continue;
+		}
+		if (res->data[HID_RMI4_REPORT_ID] != RMI_ATTN_REPORT_ID) {
+			g_debug ("attr: ignoring invalid report ID 0x%x",
+				 res->data[HID_RMI4_REPORT_ID]);
+			continue;
+		}
+
+		/* success */
+		if (source_mask & res->data[HID_RMI4_ATTN_INTERUPT_SOURCES])
+			return TRUE;
+
+		/* wrong mask */
+		g_debug ("source mask did not match: 0x%x",
+			 res->data[HID_RMI4_ATTN_INTERUPT_SOURCES]);
+	}
+
+	/* urgh */
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "no attr report, timed out");
+	return FALSE;
+}
+
+static gboolean
 fu_synaptics_rmi_device_wait_for_idle (FuSynapticsRmiDevice *self,
 				       guint timeout_ms,
 				       GError **error)
 {
+	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(GError) error_local = NULL;
+
+	/* try to get report */
+	if (!fu_synaptics_rmi_device_wait_for_attr (self,
+						    priv->f34->interrupt_mask,
+						    timeout_ms,
+						    &error_local)) {
+		if (!g_error_matches (error_local, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED)) {
+			g_propagate_prefixed_error (error,
+						    g_steal_pointer (&error_local),
+						    "failed to wait for attr: ");
+			return FALSE;
+		}
+	}
+
+	/* if for some reason we are not getting attention reports for HID devices
+	 * then we can still continue after the timeout and read F34 status
+	 * but if we have to wait for the timeout to ellapse everytime then this
+	 * will be slow */
 	//FIXME
 	return TRUE;
 }
