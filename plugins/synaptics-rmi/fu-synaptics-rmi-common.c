@@ -8,9 +8,14 @@
 
 #include "config.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include <gio/gio.h>
 
 #include "fu-common.h"
+#include "fu-io-channel.h"
 #include "fu-synaptics-rmi-common.h"
 
 #include "fwupd-error.h"
@@ -74,4 +79,23 @@ fu_synaptics_rmi_function_parse (GByteArray *buf, guint16 page_base, guint inter
 			func->interrupt_mask |= 1 << i;
 	}
 	return func;
+}
+
+gboolean
+fu_synaptics_rmi_device_writeln (const gchar *fn, const gchar *buf, GError **error)
+{
+	int fd;
+	g_autoptr(FuIOChannel) io = NULL;
+
+	fd = open (fn, O_WRONLY);
+	if (fd < 0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_INVALID_FILE,
+			     "could not open %s", fn);
+		return FALSE;
+	}
+	io = fu_io_channel_unix_new (fd);
+	return fu_io_channel_write_raw (io, (const guint8 *) buf, strlen (buf),
+					1000, FU_IO_CHANNEL_FLAG_NONE, error);
 }

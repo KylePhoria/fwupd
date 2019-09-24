@@ -153,5 +153,8 @@ FuSynapticsRmiFunction *fu_synaptics_rmi_function_parse	(GByteArray	*buf,
 							 guint16	 page_base,
 							 guint		 interrupt_count,
 							 GError		**error);
+gboolean	 fu_synaptics_rmi_device_writeln	(const gchar	*fn,
+							 const gchar	*buf,
+							 GError		**error);
 
 G_END_DECLS
