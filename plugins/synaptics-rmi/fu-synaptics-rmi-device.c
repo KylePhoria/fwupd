@@ -907,7 +907,7 @@ fu_synaptics_rmi_device_erase_all_v7 (FuSynapticsRmiDevice *self, GError **error
 			g_prefix_error (error, "failed to erase core config\n");
 			return FALSE;
 		}
-		//FIXME: wait RMI_F34_ENABLE_WAIT_MS for ATTN
+		g_usleep (1000 * RMI_F34_ENABLE_WAIT_MS);
 	}
 	return TRUE;
 }
@@ -931,7 +931,7 @@ fu_synaptics_rmi_device_erase_all (FuSynapticsRmiDevice *self, GError **error)
 		g_prefix_error (error, "failed to erase core config\n");
 		return FALSE;
 	}
-	//FIXME: wait RMI_F34_ENABLE_WAIT_MS for ATTN
+	g_usleep (1000 * RMI_F34_ENABLE_WAIT_MS);
 	return TRUE;
 }
 
