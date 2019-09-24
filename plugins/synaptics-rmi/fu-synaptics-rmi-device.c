@@ -817,6 +817,58 @@ fu_synaptics_rmi_device_prepare_firmware (FuDevice *device,
 	return g_steal_pointer (&firmware);
 }
 
+static gboolean
+fu_synaptics_rmi_device_poll (FuSynapticsRmiDevice *self, GError **error)
+{
+	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(GByteArray) f34_db = NULL;
+
+	/* get if the last flash read completed successfully */
+	f34_db = fu_synaptics_rmi_device_read (self, priv->f34->data_base, 0x1, error);
+	if (f34_db == NULL) {
+		g_prefix_error (error, "failed to read f34_db: ");
+		return FALSE;
+	}
+	if ((f34_db->data[0] & 0x1f) != 0x0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_WRITE,
+			     "flash status invalid: 0x%x",
+			     (guint) (f34_db->data[0] & 0x1f));
+		return FALSE;
+	}
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_synaptics_rmi_device_poll_wait (FuSynapticsRmiDevice *self, GError **error)
+{
+	g_autoptr(GError) error_local = NULL;
+
+	/* try to poll every 20ms fro up to 400ms */
+	for (guint i = 0; i < 20; i++) {
+		g_usleep (1000 * 20);
+		g_clear_error (&error_local);
+		if (fu_synaptics_rmi_device_poll (self, &error_local))
+			return TRUE;
+		g_debug ("failed: %s", error_local->message);
+	}
+
+	/* proxy the last error */
+	g_propagate_error (error, g_steal_pointer (&error_local));
+	return FALSE;
+}
+
+static gboolean
+fu_synaptics_rmi_device_wait_for_idle (FuSynapticsRmiDevice *self,
+				       guint timeout_ms,
+				       GError **error)
+{
+	//FIXME
+	return TRUE;
+}
 
 static gboolean
 fu_synaptics_rmi_device_write_block (FuSynapticsRmiDevice *self,
@@ -881,33 +933,57 @@ fu_synaptics_rmi_device_erase_all_v7 (FuSynapticsRmiDevice *self, GError **error
 	}
 	fu_byte_array_append_uint8 (erase_cmd, priv->bootloader_id[0]);
 	fu_byte_array_append_uint8 (erase_cmd, priv->bootloader_id[1]);
-	//FIXME: rmi4update_poll()
+	/* for BL8 device, we need hold 1 seconds after querying F34 status to
+	 * avoid not get attention by following giving erase command */
 	if (priv->bootloader_id[1] == 8)
-		g_usleep (1000);
+		g_usleep (1000 * 1000);
 	if (!fu_synaptics_rmi_device_write (self,
 					    priv->f34->data_base + 1,
 					    erase_cmd,
 					    error)) {
-		g_prefix_error (error, "failed to erase core code\n");
+		g_prefix_error (error, "failed to unlock erasing: ");
 		return FALSE;
 	}
-	//FIXME: wait for ATTN and check success
+	g_usleep (1000 * 100);
+	if (priv->bootloader_id[1] == 8){
+		/* wait for ATTN */
+		if (!fu_synaptics_rmi_device_wait_for_idle (self, RMI_F34_ERASE_V8_WAIT_MS, error)) {
+			g_prefix_error (error, "failed to wait for idle: ");
+			return FALSE;
+		}
+	}
+	if (!fu_synaptics_rmi_device_poll_wait (self, error)) {
+		g_prefix_error (error, "failed to get flash success: ");
+		return FALSE;
+	}
 
+	/* for BL7, we need erase config partition */
 	if (priv->bootloader_id[1] == 7) {
-		//FIXME: rmi4update_poll()
 		g_autoptr(GByteArray) erase_config_cmd = g_byte_array_new ();
+
 		fu_byte_array_append_uint8 (erase_config_cmd, CORE_CONFIG_PARTITION);
 		fu_byte_array_append_uint32 (erase_config_cmd, 0x0, G_LITTLE_ENDIAN);
 		fu_byte_array_append_uint8 (erase_config_cmd, CMD_V7_ERASE);
-		g_usleep (100);
+
+		g_usleep (1000 * 100);
 		if (!fu_synaptics_rmi_device_write (self,
 						    priv->f34->data_base + 1,
 						    erase_config_cmd,
 						    error)) {
-			g_prefix_error (error, "failed to erase core config\n");
+			g_prefix_error (error, "failed to erase core config: ");
 			return FALSE;
 		}
-		g_usleep (1000 * RMI_F34_ENABLE_WAIT_MS);
+
+		/* wait for ATTN */
+		g_usleep (1000 * 100);
+		if (!fu_synaptics_rmi_device_wait_for_idle (self, RMI_F34_ERASE_V8_WAIT_MS, error)) {
+			g_prefix_error (error, "failed to wait for idle: ");
+			return FALSE;
+		}
+		if (!fu_synaptics_rmi_device_poll_wait (self, error)) {
+			g_prefix_error (error, "failed to get flash success: ");
+			return FALSE;
+		}
 	}
 	return TRUE;
 }

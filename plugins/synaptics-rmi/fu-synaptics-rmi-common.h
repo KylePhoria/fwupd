@@ -113,7 +113,7 @@ typedef enum {
 
 #define RMI_F34_ENABLE_WAIT_MS				300		/* ms */
 #define RMI_F34_ERASE_WAIT_MS				(5 * 1000)	/* ms */
-#define RMI_F34_ERASE_V8_WAIT_MS			(10000)		/* ms */
+#define RMI_F34_ERASE_V8_WAIT_MS			10000		/* ms */
 #define RMI_F34_IDLE_WAIT_MS				500		/* ms */
 
 #define RMI_DEVICE_DEFAULT_TIMEOUT			2000
