@@ -10,6 +10,7 @@
 
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 #include <linux/hidraw.h>
 #include <sys/ioctl.h>
 
@@ -364,19 +365,39 @@ fu_synaptics_rmi_device_scan_pdt (FuSynapticsRmiDevice *self, GError **error)
 }
 
 static gboolean
+fu_synaptics_rmi_device_ioctl (FuSynapticsRmiDevice *self,
+			       gulong request,
+			       const guint8 *data,
+			       GError **error)
+{
+	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	gint rc = ioctl (priv->fd, request, data);
+	if (rc < 0) {
+		if (rc == -EPERM) {
+			g_set_error_literal (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_PERMISSION_DENIED,
+					     "ioctl call permission denied");
+			return FALSE;
+		}
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_INTERNAL,
+			     "ioctl call failed %s", strerror (rc));
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static gboolean
 fu_synaptics_rmi_device_set_mode (FuSynapticsRmiDevice *self,
 				  FuSynapticsRmiHidMode mode,
 				  GError **error)
 {
-	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
 	const guint8 data[] = { 0x0f, mode };
-
 	fu_common_dump_raw (G_LOG_DOMAIN, "SetMode", data, sizeof(data));
-	if (ioctl (priv->fd, HIDIOCSFEATURE(sizeof(data)), data) < 0) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_INTERNAL,
-				     "failed to SetMode");
+	if (!fu_synaptics_rmi_device_ioctl (self, HIDIOCSFEATURE(sizeof(data)), data, error)) {
+		g_prefix_error (error, "failed to SetMode: ");
 		return FALSE;
 	}
 	return TRUE;
@@ -393,11 +414,8 @@ fu_synaptics_rmi_device_set_feature (FuSynapticsRmiDevice *self,
 
 	/* Set Feature */
 	fu_common_dump_raw (G_LOG_DOMAIN, "SetFeature", data, datasz);
-	if (ioctl (priv->fd, HIDIOCSFEATURE(datasz), data) < 0) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_INTERNAL,
-				     "failed to SetFeature");
+	if (!fu_synaptics_rmi_device_ioctl (self, HIDIOCSFEATURE(datasz), data, error)) {
+		g_prefix_error ("failed to SetFeature: ");
 		return FALSE;
 	}
 	return TRUE;
@@ -410,11 +428,8 @@ fu_synaptics_rmi_device_get_feature (FuSynapticsRmiDevice *self,
 				     GError **error)
 {
 	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
-	if (ioctl (priv->fd, HIDIOCGFEATURE(datasz), data) < 0) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_INTERNAL,
-				     "failed to GetFeature");
+	if (!fu_synaptics_rmi_device_ioctl (self, HIDIOCGFEATURE(datasz), data, error)) {
+		g_prefix_error ("failed to GetFeature: ");
 		return FALSE;
 	}
 	fu_common_dump_raw (G_LOG_DOMAIN, "GetFeature", data, datasz);
@@ -730,10 +745,18 @@ fu_synaptics_rmi_device_close (FuDevice *device, GError **error)
 {
 	FuSynapticsRmiDevice *self = FU_SYNAPTICS_RMI_DEVICE (device);
 	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(GError) error_local = NULL;
 
 	/* turn it back to mouse mode */
-	if (!fu_synaptics_rmi_device_set_mode (self, HID_RMI4_MODE_MOUSE, error))
-		return FALSE;
+	if (!fu_synaptics_rmi_device_set_mode (self, HID_RMI4_MODE_MOUSE, &error_local)) {
+		/* if just detached for replug, swallow error */
+		if (!g_error_matches (error_local,
+				      FWUPD_ERROR,
+				      FWUPD_ERROR_PERMISSION_DENIED)) {
+			g_propagate_error (error, g_steal_pointer (&error_local));
+			return FALSE;
+		}
+	}
 
 	g_clear_object (&priv->io_channel);
 	priv->fd = 0;
