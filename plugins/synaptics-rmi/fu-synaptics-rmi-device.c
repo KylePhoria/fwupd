@@ -65,7 +65,7 @@ typedef struct
 	guint8			 sensor_id;
 	guint16			 package_id;
 	guint16			 package_rev;
-	guint16			 build_id;
+	guint32			 build_id;
 } FuSynapticsRmiDevicePrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (FuSynapticsRmiDevice, fu_synaptics_rmi_device, FU_TYPE_UDEV_DEVICE)
@@ -584,8 +584,6 @@ fu_synaptics_rmi_device_setup (FuDevice *device, GError **error)
 	priv->has_lts = f01_basic->data[1] & RMI_DEVICE_F01_QRY1_HAS_LTS;
 	priv->has_sensor_id = f01_basic->data[1] & RMI_DEVICE_F01_QRY1_HAS_SENSOR_ID;
 	priv->has_query42 = f01_basic->data[1] & RMI_DEVICE_F01_QRY1_HAS_PROPS_2;
-	fw_ver = g_strdup_printf ("%u.%u", f01_basic->data[2], f01_basic->data[3]);
-	fu_device_set_version (device, fw_ver, FWUPD_VERSION_FORMAT_PAIR);
 
 	/* use the product ID as the name */
 	addr += 11;
@@ -665,13 +663,25 @@ fu_synaptics_rmi_device_setup (FuDevice *device, GError **error)
 	}
 	if (has_build_id_query) {
 		g_autoptr(GByteArray) f01_tmp = NULL;
+		guint8 buf32[4] = { 0x0 };
 		f01_tmp = fu_synaptics_rmi_device_read (self, prod_info_addr, BUILD_ID_BYTES, error);
 		if (f01_tmp == NULL) {
 			g_prefix_error (error, "failed to read build ID bytes: ");
 			return FALSE;
 		}
-		priv->build_id = fu_common_read_uint16 (f01_tmp->data, G_LITTLE_ENDIAN);
+		if (!fu_memcpy_safe (buf32, sizeof(buf32), 0x0,		/* dst */
+				     f01_tmp->data, f01_tmp->len, 0x0,	/* src */
+				     f01_tmp->len, error))
+			return FALSE;
+		priv->build_id = fu_common_read_uint32 (buf32, G_LITTLE_ENDIAN);
 	}
+
+	/* set main composite version */
+	fw_ver = g_strdup_printf ("%u.%u.%u",
+				  f01_basic->data[2],
+				  f01_basic->data[3],
+				  priv->build_id);
+	fu_device_set_version (device, fw_ver, FWUPD_VERSION_FORMAT_TRIPLET);
 
 	priv->f34 = fu_synaptics_rmi_device_get_function (self, 0x34, error);
 	if (priv->f34 == NULL)
