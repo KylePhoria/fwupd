@@ -557,8 +557,9 @@ fu_synaptics_rmi_device_setup (FuDevice *device, GError **error)
 	guint8 has_build_id_query = FALSE;
 	guint8 has_package_id_query = FALSE;
 	g_autofree gchar *bl_ver = NULL;
+	g_autofree gchar *board_id = NULL;
 	g_autofree gchar *fw_ver = NULL;
-	g_autofree gchar *name = NULL;
+	g_autofree gchar *instance_id = NULL;
 	g_autoptr(GByteArray) f01_basic = NULL;
 	g_autoptr(GByteArray) f01_db = NULL;
 	g_autoptr(GByteArray) f01_product_id = NULL;
@@ -585,15 +586,16 @@ fu_synaptics_rmi_device_setup (FuDevice *device, GError **error)
 	priv->has_sensor_id = f01_basic->data[1] & RMI_DEVICE_F01_QRY1_HAS_SENSOR_ID;
 	priv->has_query42 = f01_basic->data[1] & RMI_DEVICE_F01_QRY1_HAS_PROPS_2;
 
-	/* use the product ID as the name */
+	/* use the product ID as an instance ID */
 	addr += 11;
 	f01_product_id = fu_synaptics_rmi_device_read (self, addr, RMI_PRODUCT_ID_LENGTH, error);
 	if (f01_product_id == NULL) {
 		g_prefix_error (error, "failed to read the product id: ");
 		return FALSE;
 	}
-	name = g_strndup ((const gchar *) f01_product_id->data, f01_product_id->len);
-	fu_device_set_name (device, name);
+	board_id = g_strndup ((const gchar *) f01_product_id->data, f01_product_id->len);
+	instance_id = g_strdup_printf ("SYNAPTICS_RMI\\%s", board_id);
+	fu_device_add_instance_id (device, instance_id);
 
 	/* skip */
 	prod_info_addr = addr + 6;
