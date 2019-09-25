@@ -925,9 +925,13 @@ fu_synaptics_rmi_device_wait_for_idle (FuSynapticsRmiDevice *self,
 				       GError **error)
 {
 	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	guint8 f34_command;
+	guint8 f34_enabled;
+	guint8 f34_status;
+	g_autoptr(GByteArray) res = NULL;
 	g_autoptr(GError) error_local = NULL;
 
-	/* try to get report */
+	/* try to get report without requesting */
 	if (!fu_synaptics_rmi_device_wait_for_attr (self,
 						    priv->f34->interrupt_mask,
 						    timeout_ms,
@@ -944,8 +948,41 @@ fu_synaptics_rmi_device_wait_for_idle (FuSynapticsRmiDevice *self,
 	 * then we can still continue after the timeout and read F34 status
 	 * but if we have to wait for the timeout to ellapse everytime then this
 	 * will be slow */
-	//FIXME
-	return TRUE;
+	if (priv->f34->function_version == 0x1) {
+		res = fu_synaptics_rmi_device_read (self, priv->f34_status_addr, 0x2, error);
+		if (res == NULL)
+			return FALSE;
+		f34_command = res->data[0] & RMI_F34_COMMAND_V1_MASK;
+		f34_status = res->data[1] & RMI_F34_STATUS_V1_MASK;
+		f34_enabled = !!(res->data[1] & RMI_F34_ENABLED_MASK);
+	} else {
+		res = fu_synaptics_rmi_device_read (self, priv->f34_status_addr, 0x1, error);
+		if (res == NULL)
+			return FALSE;
+		f34_command = res->data[0] & RMI_F34_COMMAND_MASK;
+		f34_status = (res->data[0] >> RMI_F34_STATUS_SHIFT) & RMI_F34_STATUS_MASK;
+		f34_enabled = !!(res->data[0] & RMI_F34_ENABLED_MASK);
+	}
+
+	/* is idle */
+	if (!f34_status && !f34_command) {
+		if (!f34_enabled) {
+			g_set_error_literal (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_NOT_SUPPORTED,
+					     "idle but enabled unset");
+			return FALSE;
+		}
+		return TRUE;
+	}
+
+	/* failed */
+	g_set_error (error,
+		     FWUPD_ERROR,
+		     FWUPD_ERROR_NOT_SUPPORTED,
+		     "timed out waiting for idle [cmd:0x%02x, sta:0x%02x, ena:0x%02x]",
+		     f34_command, f34_status, f34_enabled);
+	return FALSE;
 }
 
 static gboolean
