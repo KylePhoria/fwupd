@@ -1000,21 +1000,23 @@ fu_synaptics_rmi_device_wait_for_idle (FuSynapticsRmiDevice *self,
 static gboolean
 fu_synaptics_rmi_device_write_block (FuSynapticsRmiDevice *self,
 				     guint8 cmd,
-				     guint32 idx,
 				     guint32 address,
 				     const guint8 *data,
-				     guint16 datasz,
+				     gsize datasz,
 				     GError **error)
 {
-//	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(GByteArray) req = g_byte_array_new ();
 
-	//FIXME: Write @address tp F34_Flash_Data0,1, but after first chunk it auto-increments...
-	if (idx == 0) {
-		//FIXME
+	g_byte_array_append (req, data, datasz);
+	fu_byte_array_append_uint8 (req, cmd);
+	if (!fu_synaptics_rmi_device_write (self, address, req, error)) {
+		g_prefix_error (error, "failed to write block @0x%x: ", address);
+		return FALSE;
 	}
-	//FIXME: write @data to F34_Flash_Data2
-	//FIXME: write @cmd into F34_Flash_Data3
-	//FIXME: wait for ATTN and check success $80
+	if (!fu_synaptics_rmi_device_wait_for_idle (self, RMI_F34_IDLE_WAIT_MS, error)) {
+		g_prefix_error (error, "failed to wait for idle @0x%x: ", address);
+		return FALSE;
+	}
 	return TRUE;
 }
 
@@ -1116,14 +1118,104 @@ fu_synaptics_rmi_device_erase_all_v7 (FuSynapticsRmiDevice *self, GError **error
 }
 
 static gboolean
+fu_synaptics_rmi_device_write_firmware_v7 (FuDevice *device,
+					   FuFirmware *firmware,
+					   FwupdInstallFlags flags,
+					   GError **error)
+{
+	FuSynapticsRmiDevice *self = FU_SYNAPTICS_RMI_DEVICE (device);
+	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	guint32 address = RMI_F34_BLOCK_DATA_V1_OFFSET;	//FIXME: is this right for v7???
+	g_autoptr(GBytes) bytes_bin = NULL;
+	g_autoptr(GBytes) bytes_cfg = NULL;
+	g_autoptr(GBytes) bytes_flashcfg = NULL;
+	g_autoptr(GPtrArray) chunks_bin = NULL;
+	g_autoptr(GPtrArray) chunks_cfg = NULL;
+
+	/* get both images */
+	bytes_bin = fu_firmware_get_image_by_id_bytes (firmware, "ui", error);
+	if (bytes_bin == NULL)
+		return FALSE;
+	bytes_cfg = fu_firmware_get_image_by_id_bytes (firmware, "config", error);
+	if (bytes_cfg == NULL)
+		return FALSE;
+	if (priv->bootloader_id[1] == 8) {
+		bytes_flashcfg = fu_firmware_get_image_by_id_bytes (firmware, "flash-config", error);
+		if (bytes_flashcfg == NULL)
+			return FALSE;
+	}
+
+	/* disable powersaving */
+	if (!fu_synaptics_rmi_device_disable_sleep (self, error))
+		return FALSE;
+
+	/* erase all */
+	if (!fu_synaptics_rmi_device_erase_all_v7 (self, error)) {
+		g_prefix_error (error, "failed to erase all: ");
+		return FALSE;
+	}
+
+	/* write flash config for v8 */
+	if (bytes_flashcfg != NULL) {
+		g_autoptr(GByteArray) partition_id = g_byte_array_new ();
+		g_autoptr(GByteArray) zero = g_byte_array_new ();
+		g_autoptr(GPtrArray) chunks_flashcfg = NULL;
+
+		/* write config id */
+		fu_byte_array_append_uint16 (zero, 0x0, G_LITTLE_ENDIAN);
+		fu_byte_array_append_uint8 (partition_id, FLASH_CONFIG_PARTITION);
+		if (!fu_synaptics_rmi_device_write (self,
+						    priv->f34->data_base,
+						    partition_id,
+						    error)) {
+			g_prefix_error (error, "failed to write flash config id v8: ");
+			return FALSE;
+		}
+		if (!fu_synaptics_rmi_device_write (self,
+						    priv->f34->data_base + 2,
+						    zero,
+						    error)) {
+			g_prefix_error (error, "failed to write initial zero: ");
+			return FALSE;
+		}
+
+		/* write flash config */
+		chunks_flashcfg = fu_chunk_array_new_from_bytes (bytes_flashcfg,
+								 0x00,	/* start addr */
+								 0x00,	/* page_sz */
+								 priv->block_size);
+		for (guint i = 0; i < chunks_flashcfg->len; i++) {
+			FuChunk *chk = g_ptr_array_index (chunks_flashcfg, i);
+			if (!fu_synaptics_rmi_device_write_block (self,
+								  RMI_F34_WRITE_FW_BLOCK,
+								  address,
+								  chk->data,
+								  chk->data_sz,
+								  error))
+				return FALSE;
+			fu_device_set_progress_full (device, (gsize) i,
+						     (gsize) chunks_flashcfg->len + chunks_flashcfg->len);
+		}
+	}
+
+	/* FIXME: write core code */
+	chunks_bin = fu_chunk_array_new_from_bytes (bytes_bin,
+						    0x00,	/* start addr */
+						    0x00,	/* page_sz */
+						    priv->block_size);
+	/* FIXME: write config */
+	chunks_cfg = fu_chunk_array_new_from_bytes (bytes_cfg,
+						    0x00,	/* start addr */
+						    0x00,	/* page_sz */
+						    priv->block_size);
+	return TRUE;
+}
+
+static gboolean
 fu_synaptics_rmi_device_erase_all (FuSynapticsRmiDevice *self, GError **error)
 {
 	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
 	g_autoptr(GByteArray) erase_cmd = g_byte_array_new ();
-
-	/* v7 */
-	if (priv->f34->function_version == 0x02)
-		return fu_synaptics_rmi_device_erase_all_v7 (self, error);
 
 	/* all other versions */
 	fu_byte_array_append_uint8 (erase_cmd, RMI_F34_ERASE_ALL);
@@ -1131,7 +1223,7 @@ fu_synaptics_rmi_device_erase_all (FuSynapticsRmiDevice *self, GError **error)
 					    priv->f34_status_addr,
 					    erase_cmd,
 					    error)) {
-		g_prefix_error (error, "failed to erase core config\n");
+		g_prefix_error (error, "failed to erase core config: ");
 		return FALSE;
 	}
 	g_usleep (1000 * RMI_F34_ENABLE_WAIT_MS);
@@ -1146,10 +1238,13 @@ fu_synaptics_rmi_device_write_firmware (FuDevice *device,
 {
 	FuSynapticsRmiDevice *self = FU_SYNAPTICS_RMI_DEVICE (device);
 	FuSynapticsRmiDevicePrivate *priv = GET_PRIVATE (self);
+	guint32 address;
 	g_autoptr(GBytes) bytes_bin = NULL;
 	g_autoptr(GBytes) bytes_cfg = NULL;
 	g_autoptr(GPtrArray) chunks_bin = NULL;
 	g_autoptr(GPtrArray) chunks_cfg = NULL;
+	g_autoptr(GByteArray) zero = g_byte_array_new ();
+
 
 	/* we should be in bootloader mode now, but check anyway */
 	if (!fu_device_has_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER)) {
@@ -1160,6 +1255,10 @@ fu_synaptics_rmi_device_write_firmware (FuDevice *device,
 		return FALSE;
 	}
 
+	/* bootloader v7+ */
+	if (priv->f34->function_version == 0x02)
+		return fu_synaptics_rmi_device_write_firmware_v7 (device, firmware, flags, error);
+
 	/* get both images */
 	bytes_bin = fu_firmware_get_image_by_id_bytes (firmware, "ui", error);
 	if (bytes_bin == NULL)
@@ -1167,16 +1266,6 @@ fu_synaptics_rmi_device_write_firmware (FuDevice *device,
 	bytes_cfg = fu_firmware_get_image_by_id_bytes (firmware, "config", error);
 	if (bytes_cfg == NULL)
 		return FALSE;
-
-	/* build packets */
-	chunks_bin = fu_chunk_array_new_from_bytes (bytes_bin,
-						    0x00,	/* start addr */
-						    0x00,	/* page_sz */
-						    priv->block_size);
-	chunks_cfg = fu_chunk_array_new_from_bytes (bytes_cfg,
-						    0x00,	/* start addr */
-						    0x00,	/* page_sz */
-						    priv->block_size);
 
 	/* disable powersaving */
 	if (!fu_synaptics_rmi_device_disable_sleep (self, error))
@@ -1188,14 +1277,31 @@ fu_synaptics_rmi_device_write_firmware (FuDevice *device,
 		return FALSE;
 	}
 
+	/* write initial zero */
+	fu_byte_array_append_uint16 (zero, 0x0, G_LITTLE_ENDIAN);
+	if (priv->f34->function_version == 0x01)
+		address = priv->f34->data_base + RMI_F34_BLOCK_DATA_V1_OFFSET;
+	else
+		address = priv->f34->data_base + RMI_F34_BLOCK_DATA_OFFSET;
+	if (!fu_synaptics_rmi_device_write (self,
+					    address,
+					    zero,
+					    error)) {
+		g_prefix_error (error, "failed to write initial zero: ");
+		return FALSE;
+	}
+
 	/* write each block */
+	chunks_bin = fu_chunk_array_new_from_bytes (bytes_bin,
+						    0x00,	/* start addr */
+						    0x00,	/* page_sz */
+						    priv->block_size);
 	fu_device_set_status (device, FWUPD_STATUS_DEVICE_WRITE);
 	for (guint i = 0; i < chunks_bin->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks_bin, i);
 		if (!fu_synaptics_rmi_device_write_block (self,
-							  0x02, /* write firmware */
-							  chk->idx,
-							  chk->address,
+							  RMI_F34_WRITE_FW_BLOCK, /* write firmware */
+							  address,
 							  chk->data,
 							  chk->data_sz,
 							  error))
@@ -1205,22 +1311,25 @@ fu_synaptics_rmi_device_write_firmware (FuDevice *device,
 	}
 
 	/* program the configuration image */
+	chunks_cfg = fu_chunk_array_new_from_bytes (bytes_cfg,
+						    0x00,	/* start addr */
+						    0x00,	/* page_sz */
+						    priv->block_size);
 	for (guint i = 0; i < chunks_cfg->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks_cfg, i);
 		if (!fu_synaptics_rmi_device_write_block (self,
-							  0x06, /* write firmware */
-							  chk->idx,
-							  chk->address,
+							  RMI_F34_WRITE_CONFIG_BLOCK, /* write config */
+							  address,
 							  chk->data,
 							  chk->data_sz,
 							  error))
 			return FALSE;
 		fu_device_set_progress_full (device,
-					     (gsize) chunks_bin->len + i,
-					     (gsize) chunks_bin->len + chunks_cfg->len);
+					     (gsize) chunks_cfg->len + i,
+					     (gsize) chunks_cfg->len + chunks_cfg->len);
 	}
 
-	//FIXME
+	/* success */
 	return TRUE;
 }
 
