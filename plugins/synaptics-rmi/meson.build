@@ -10,6 +10,8 @@ shared_module('fu_plugin_synaptics_rmi',
     'fu-plugin-synaptics-rmi.c',
     'fu-synaptics-rmi-common.c',
     'fu-synaptics-rmi-device.c',
+    'fu-synaptics-rmi-v5-device.c',
+    'fu-synaptics-rmi-v7-device.c',
     'fu-synaptics-rmi-firmware.c',
   ],
   include_directories : [
