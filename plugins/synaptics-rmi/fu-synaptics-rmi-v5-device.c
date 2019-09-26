@@ -159,11 +159,11 @@ fu_synaptics_rmi_v5_device_write_firmware (FuDevice *device,
 	for (guint i = 0; i < chunks_bin->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks_bin, i);
 		if (!fu_synaptics_rmi_v5_device_write_block (self,
-							  RMI_F34_WRITE_FW_BLOCK, /* write firmware */
-							  address,
-							  chk->data,
-							  chk->data_sz,
-							  error))
+							     RMI_F34_WRITE_FW_BLOCK,
+							     address,
+							     chk->data,
+							     chk->data_sz,
+							     error))
 			return FALSE;
 		fu_device_set_progress_full (device, (gsize) i,
 					     (gsize) chunks_bin->len + chunks_cfg->len);
@@ -177,7 +177,7 @@ fu_synaptics_rmi_v5_device_write_firmware (FuDevice *device,
 	for (guint i = 0; i < chunks_cfg->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks_cfg, i);
 		if (!fu_synaptics_rmi_v5_device_write_block (self,
-							     RMI_F34_WRITE_CONFIG_BLOCK, /* write config */
+							     RMI_F34_WRITE_CONFIG_BLOCK,
 							     address,
 							     chk->data,
 							     chk->data_sz,
