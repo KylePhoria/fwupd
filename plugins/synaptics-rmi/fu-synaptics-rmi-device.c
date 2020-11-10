@@ -628,6 +628,7 @@ fu_synaptics_rmi_device_close (FuUdevDevice *device, GError **error)
 static gboolean
 fu_synaptics_rmi_device_probe (FuUdevDevice *device, GError **error)
 {
+	g_debug ("David fu_synaptics_rmi_device_probe");
 	return fu_udev_device_set_physical_id (device, "hid", error);
 }
 

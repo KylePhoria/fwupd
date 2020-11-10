@@ -2,6 +2,10 @@
 Plugin = synaptics_rmi
 Vendor = Synaptics
 
+[DeviceInstanceId=SERIO]
+Plugin = synaptics_rmi
+GType = FuSynapticsRmiPs2Device
+
 # Dell K12A kbd-dock
 [DeviceInstanceId=HIDRAW\VEN_06CB&DEV_2819]
 Flags = only-supported
