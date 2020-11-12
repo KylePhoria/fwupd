@@ -10,6 +10,7 @@
 
 #include <sys/ioctl.h>
 #include <linux/hidraw.h>
+//#include "fu-udev-device.h"
 
 #include "fu-io-channel.h"
 
@@ -629,6 +630,29 @@ static gboolean
 fu_synaptics_rmi_device_probe (FuUdevDevice *device, GError **error)
 {
 	g_debug ("David fu_synaptics_rmi_device_probe");
+	/* check is valid */
+	if (g_strcmp0 (fu_udev_device_get_subsystem (device), "serio") != 0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "is not correct subsystem=%s, expected serio",
+			     fu_udev_device_get_subsystem (device));
+		return FALSE;
+	}
+	if (fu_udev_device_get_device_file (device) == NULL) {
+		g_debug ("no device file, return false");
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "no device file");
+		return FALSE;
+	}
+	
+	if (g_strcmp0 (fu_udev_device_get_subsystem (device), "serio") == 0) {
+		g_debug ("subsystem serio");
+		return fu_udev_device_set_physical_id (device, "serio", error);
+	} else 
+		g_debug ("else subsystem %s", g_udev_device_get_subsystem(device));
 	return fu_udev_device_set_physical_id (device, "hid", error);
 }
 

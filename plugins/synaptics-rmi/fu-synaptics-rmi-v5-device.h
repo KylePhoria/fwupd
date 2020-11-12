@@ -9,7 +9,6 @@
 #include <glib-object.h>
 
 #include "fu-synaptics-rmi-device.h"
-#include "fu-synaptics-rmi-ps2-device.h"
 
 gboolean	 fu_synaptics_rmi_v5_device_detach		(FuDevice	*device,
 								 GError		**error);
